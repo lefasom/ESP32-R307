@@ -18,14 +18,16 @@ def send_data(path, data):
         return False
 
 
-def get_data(path):
+def get_data(path, silent=False):
     try:
         url = f"{FIREBASE_URL}/{path}.json"
         response = urequests.get(url)
         data = response.json()
         response.close()
-        print("📥 Datos recibidos correctamente")
+        if not silent:
+            print("📥 Datos recibidos correctamente")
         return data
     except Exception as e:
-        print("❌ Error al obtener datos:", e)
+        if not silent:
+            print("❌ Error al obtener datos:", e)
         return None

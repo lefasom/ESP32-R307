@@ -109,70 +109,49 @@ def agregar_huella():
     posicion = obtener_siguiente_posicion()
     print(f"Usando posición: {posicion}")
 
-    # 1. Capturar la primera imagen (con timeout)
-    success, _ = wait_for_finger_press(
-        TIMEOUT_SEGUNDOS, "Coloque el dedo para la primera imagen"
-    )
+    success, _ = wait_for_finger_press(TIMEOUT_SEGUNDOS, "Coloque el dedo")
     if not success:
         return False
 
-    # 2. Generar la plantilla de la primera imagen
-    packet_generate_template = bytes(
+    packet1 = bytes(
         [0xEF, 0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0x01, 0x00, 0x04, 0x02, 0x01, 0x00, 0x08]
     )
-    response = send_command(packet_generate_template)
+    response = send_command(packet1)
     time.sleep(PAUSA_CORTA)
-    if response and response[9] == 0x00:
-        print("Plantilla 1 generada.")
-    else:
-        print("Error al generar la plantilla 1.")
+    if not (response and response[9] == 0x00):
         return False
 
-    # 3. Esperar que se levante el dedo y luego capturar la segunda imagen (con timeout)
     if not wait_for_finger_release(TIMEOUT_SEGUNDOS, "Levante el dedo"):
         return False
 
-    success, _ = wait_for_finger_press(
-        TIMEOUT_SEGUNDOS, "Vuelva a colocar el mismo dedo para la segunda imagen"
-    )
+    success, _ = wait_for_finger_press(TIMEOUT_SEGUNDOS, "Coloque el dedo nuevamente")
     if not success:
         return False
 
-    # 4. Generar la plantilla de la segunda imagen
-    packet_generate_template_2 = bytes(
+    packet2 = bytes(
         [0xEF, 0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0x01, 0x00, 0x04, 0x02, 0x02, 0x00, 0x09]
     )
-    response = send_command(packet_generate_template_2)
+    response = send_command(packet2)
     time.sleep(PAUSA_CORTA)
-    if response and response[9] == 0x00:
-        print("Plantilla 2 generada.")
-    else:
-        print("Error al generar la plantilla 2.")
+    if not (response and response[9] == 0x00):
         return False
 
-    # 5. Unir las dos plantillas en un modelo
-    packet_combine_templates = bytes(
+    combine_packet = bytes(
         [0xEF, 0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0x01, 0x00, 0x03, 0x05, 0x00, 0x09]
     )
-    response = send_command(packet_combine_templates)
+    response = send_command(combine_packet)
     time.sleep(PAUSA_CORTA)
-    if response and response[9] == 0x00:
-        print("Modelos combinados.")
-    else:
-        print("Error al combinar plantillas.")
+    if not (response and response[9] == 0x00):
         return False
 
-    # 6. Almacenar el modelo en la posición específica (PAQUETE CORREGIDO)
     pos_high = (posicion >> 8) & 0xFF
     pos_low = posicion & 0xFF
+    data = [0x01, 0x00, 0x06, 0x06, 0x01, pos_high, pos_low]
+    checksum = calculate_checksum(data)
+    ch = (checksum >> 8) & 0xFF
+    cl = checksum & 0xFF
 
-    # Nuevo paquete con longitud y checksum correctos
-    data_to_checksum = [0x01, 0x00, 0x06, 0x06, 0x01, pos_high, pos_low]
-    checksum = calculate_checksum(data_to_checksum)
-    checksum_high = (checksum >> 8) & 0xFF
-    checksum_low = checksum & 0xFF
-
-    packet_store_model = bytes(
+    store_packet = bytes(
         [
             0xEF,
             0x01,
@@ -182,21 +161,19 @@ def agregar_huella():
             0xFF,
             0x01,
             0x00,
-            0x06,  # Longitud del paquete corregida a 6 bytes
+            0x06,
             0x06,
             0x01,
             pos_high,
             pos_low,
-            checksum_high,
-            checksum_low,  # Checksum calculado
+            ch,
+            cl,
         ]
     )
-
-    response = send_command(packet_store_model)
+    response = send_command(store_packet)
     time.sleep(PAUSA_CORTA)
 
     if response and response[9] == 0x00:
-        print("¡Huella guardada exitosamente en el sensor!")
         timestamp = generar_timestamp()
         usuario_id = f"user_{posicion}_{timestamp}"
         datos_usuario = {
@@ -211,14 +188,13 @@ def agregar_huella():
         }
 
         if send_data(f"usuarios/{usuario_id}", datos_usuario):
-            print(f"✅ Usuario registrado en Firebase: {usuario_id}")
             indice_sensor = {
                 "usuario_id": usuario_id,
                 "nombre": datos_usuario["nombre"],
                 "activo": True,
             }
             send_data(f"indices_sensor/{posicion}", indice_sensor)
-            return True
+            return datos_usuario
         else:
             print("⚠️ Huella guardada pero error al registrar en Firebase")
             return False
@@ -229,34 +205,24 @@ def agregar_huella():
 
 def detectar_huella():
     print("=== DETECTAR HUELLA ===")
-    print("Por favor, coloque su dedo para la detección...")
-    success, _ = wait_for_finger_press(TIMEOUT_SEGUNDOS, "Esperando huella dactilar")
+    success, _ = wait_for_finger_press(TIMEOUT_SEGUNDOS, "Esperando huella")
     if not success:
-        print("❌ Detección de huella cancelada por tiempo agotado.")
         return None
 
-    print("Imagen capturada. Procesando...")
-
-    # 2. Generar la plantilla
-    packet_generate_template = bytes(
+    packet = bytes(
         [0xEF, 0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0x01, 0x00, 0x04, 0x02, 0x01, 0x00, 0x08]
     )
-    response = send_command(packet_generate_template)
+    response = send_command(packet)
     time.sleep(PAUSA_CORTA)
-    if response and response[9] == 0x00:
-        print("Plantilla generada. Buscando en la base de datos...")
-    else:
-        print("Error al generar la plantilla.")
+    if not (response and response[9] == 0x00):
         return None
 
-    # 3. Buscar la huella en la base de datos (PAQUETE CORREGIDO)
-    # Nuevo paquete con longitud y checksum correctos
-    data_to_checksum = [0x01, 0x00, 0x08, 0x04, 0x01, 0x00, 0x00, 0x00, 0x64]
-    checksum = calculate_checksum(data_to_checksum)
-    checksum_high = (checksum >> 8) & 0xFF
-    checksum_low = checksum & 0xFF
+    data = [0x01, 0x00, 0x08, 0x04, 0x01, 0x00, 0x00, 0x00, 0x64]
+    checksum = calculate_checksum(data)
+    ch = (checksum >> 8) & 0xFF
+    cl = checksum & 0xFF
 
-    packet_search = bytes(
+    search_packet = bytes(
         [
             0xEF,
             0x01,
@@ -266,32 +232,28 @@ def detectar_huella():
             0xFF,
             0x01,
             0x00,
-            0x08,  # Longitud del paquete (8 bytes de datos)
+            0x08,
             0x04,
             0x01,
             0x00,
             0x00,
             0x00,
-            0x64,  # Datos
-            checksum_high,
-            checksum_low,  # Checksum calculado
+            0x64,
+            ch,
+            cl,
         ]
     )
-    response = send_command(packet_search)
+    response = send_command(search_packet)
     time.sleep(PAUSA_CORTA)
 
     if response and response[9] == 0x00:
         id_huella = int.from_bytes(response[10:12], "big")
         score = int.from_bytes(response[12:14], "big")
-        print(f"¡Huella encontrada! ID: {id_huella}, Puntuación: {score}")
         indice = get_data(f"indices_sensor/{id_huella}")
         if indice:
             usuario_id = indice.get("usuario_id")
             nombre = indice.get("nombre", "Desconocido")
             activo = indice.get("activo", True)
-            print(f"👤 Usuario: {nombre}")
-            print(f"📋 ID: {usuario_id}")
-            print(f"✅ Estado: {'Activo' if activo else 'Inactivo'}")
             timestamp = generar_timestamp()
             datos_acceso = {
                 "usuario_id": usuario_id,
@@ -303,23 +265,29 @@ def detectar_huella():
                 "tipo_acceso": "entrada",
             }
             acceso_id = f"acceso_{timestamp}"
-            if send_data(f"registros_acceso/{acceso_id}", datos_acceso):
-                print("📝 Acceso registrado en Firebase")
-            else:
-                print("⚠️ Error al registrar acceso en Firebase")
-            return {"id": id_huella}
+            send_data(f"registros_acceso/{acceso_id}", datos_acceso)
+            return {"id_sensor": id_huella, "usuario_id": usuario_id, "nombre": nombre}
         else:
-            print("⚠️ Usuario no encontrado en base de datos")
+            timestamp = generar_timestamp()
+            send_data(
+                f"intentos_fallidos/{timestamp}",
+                {
+                    "timestamp": timestamp,
+                    "resultado": "no_autorizado",
+                    "tipo_acceso": "entrada_denegada",
+                },
+            )
             return None
     else:
-        print("❌ No se encontró ninguna coincidencia.")
         timestamp = generar_timestamp()
-        datos_intento = {
-            "timestamp": timestamp,
-            "resultado": "no_autorizado",
-            "tipo_acceso": "entrada_denegada",
-        }
-        send_data(f"intentos_fallidos/{timestamp}", datos_intento)
+        send_data(
+            f"intentos_fallidos/{timestamp}",
+            {
+                "timestamp": timestamp,
+                "resultado": "sin_coincidencia",
+                "tipo_acceso": "entrada_denegada",
+            },
+        )
         return None
 
 

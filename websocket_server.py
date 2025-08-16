@@ -21,9 +21,9 @@ class WebSocketServer:
         self.server_socket = None
         self.running = False
         self.poller = uselect.poll()
+        self.last_command_snapshot = None
 
     def start(self):
-        """Inicia el servidor WebSocket"""
         try:
             self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -33,28 +33,23 @@ class WebSocketServer:
             self.running = True
             print(f"🌐 Servidor WebSocket iniciado en puerto {self.port}")
             self._update_device_status("online")
-
             self._server_loop()
         except Exception as e:
             print(f"❌ Error al iniciar el servidor: {e}")
             self.stop()
 
     def _server_loop(self):
-        """Loop principal del servidor"""
         while self.running:
             self._check_firebase_commands()
-            events = self.poller.poll(1000)  # 1 segundo de timeout
-
+            events = self.poller.poll(1000)
             for sock, event in events:
                 if sock == self.server_socket and event == uselect.POLLIN:
                     self._handle_new_connection()
                 else:
                     self._handle_client_data(sock)
-
             self._cleanup_clients()
 
-    def _handle_new_connection(self, client_socket):
-        """Maneja nuevas conexiones"""
+    def _handle_new_connection(self, client_socket=None):
         try:
             client_socket, addr = self.server_socket.accept()
             print(f"📱 Cliente conectado desde {addr}")
@@ -66,11 +61,9 @@ class WebSocketServer:
             print(f"❌ Error al aceptar cliente: {e}")
 
     def _handle_client_data(self, client_socket):
-        """Maneja datos de un cliente existente"""
         pass
 
     def _handle_websocket_handshake(self, client_socket):
-        """Maneja el handshake WebSocket (simplificado)"""
         try:
             request = client_socket.recv(1024).decode("utf-8")
             if "Upgrade: websocket" in request:
@@ -79,7 +72,6 @@ class WebSocketServer:
                 )
                 key_end = request.find("\r\n", key_start)
                 key = request[key_start:key_end].strip()
-
                 if key:
                     response = (
                         "HTTP/1.1 101 Switching Protocols\r\n"
@@ -96,7 +88,6 @@ class WebSocketServer:
             return False
 
     def _send_welcome_message(self, client_socket):
-        """Envía mensaje de bienvenida al cliente"""
         welcome_msg = {
             "type": "connection",
             "status": "connected",
@@ -106,7 +97,6 @@ class WebSocketServer:
         self._send_websocket_message(client_socket, welcome_msg)
 
     def _send_websocket_message(self, client_socket, message):
-        """Envía un mensaje WebSocket al cliente"""
         try:
             data = ujson.dumps(message)
             frame = bytearray()
@@ -122,16 +112,12 @@ class WebSocketServer:
             print(f"❌ Error enviando mensaje WebSocket: {e}")
 
     def _check_firebase_commands(self):
-        """Verifica comandos pendientes desde Firebase"""
         try:
             command_path = "commands/esp32_command"
-            command = get_data(command_path)
+            command = get_data(command_path, silent=True)
 
             if not command:
-                # Si el nodo no existe, lo crea en estado de espera
-                print(
-                    "⏳ Nodo de comando no encontrado. Creando y entrando en modo de espera..."
-                )
+                print("⏳ Nodo de comando no encontrado. Creando y esperando...")
                 waiting_command = {
                     "action": "waiting",
                     "status": "waiting",
@@ -140,12 +126,17 @@ class WebSocketServer:
                 }
                 send_data(command_path, waiting_command)
                 self._broadcast_to_clients(waiting_command)
+                self.last_command_snapshot = waiting_command
                 return
 
-            if command and command.get("status") == "pending":
+            if command == self.last_command_snapshot:
+                return
+
+            self.last_command_snapshot = command
+
+            if command.get("status") == "pending":
                 print(f"📨 Comando recibido: {command}")
                 result = self._process_command(command)
-
                 command["status"] = "completed"
                 command["result"] = result
                 command["completed_at"] = time.ticks_ms()
@@ -162,7 +153,6 @@ class WebSocketServer:
             print(f"❌ Error verificando comandos: {e}")
 
     def _process_command(self, command):
-        """Procesa un comando recibido y llama a las funciones del sensor"""
         action = command.get("action")
         result = {"success": False, "message": "Comando desconocido"}
 
@@ -186,15 +176,20 @@ class WebSocketServer:
             self._broadcast_to_clients(
                 {"type": "status", "message": "Iniciando registro de huella..."}
             )
-            if agregar_huella():
-                result = {"success": True, "message": "Huella agregada exitosamente"}
+            user_data = agregar_huella()
+            if user_data:
+                result = {
+                    "success": True,
+                    "message": "Huella agregada exitosamente",
+                    "data": user_data,
+                }
             else:
                 result = {"success": False, "message": "Error al agregar la huella"}
 
         elif action == "get_statistics":
             print("📊 Obteniendo estadísticas...")
-            stats = mostrar_estadisticas()
-            result = {"success": True, "statistics": stats}
+            mostrar_estadisticas()
+            result = {"success": True, "message": "Estadísticas mostradas"}
 
         elif action == "delete_fingerprint":
             print("🗑️ Eliminando huella...")
@@ -210,7 +205,6 @@ class WebSocketServer:
         return result
 
     def _broadcast_to_clients(self, message):
-        """Envía un mensaje a todos los clientes conectados"""
         for client in self.clients[:]:
             try:
                 self._send_websocket_message(client, message)
@@ -218,7 +212,6 @@ class WebSocketServer:
                 pass
 
     def _cleanup_clients(self):
-        """Limpia clientes desconectados"""
         active_clients = []
         for client in self.clients:
             try:
@@ -232,7 +225,6 @@ class WebSocketServer:
         self.clients = active_clients
 
     def _update_device_status(self, status):
-        """Actualiza el estado del dispositivo en Firebase"""
         device_status = {
             "status": status,
             "last_seen": time.ticks_ms(),
@@ -241,7 +233,6 @@ class WebSocketServer:
         send_data("devices/ESP32_R307/status", device_status)
 
     def stop(self):
-        """Detiene el servidor"""
         self.running = False
         self._update_device_status("offline")
         for client in self.clients:
@@ -255,7 +246,6 @@ class WebSocketServer:
 
 
 def start_websocket_server():
-    """Inicia el servidor WebSocket"""
     server = WebSocketServer(port=8765)
     try:
         server.start()
