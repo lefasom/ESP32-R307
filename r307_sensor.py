@@ -55,6 +55,149 @@ def obtener_siguiente_posicion():
     return 1
 
 
+def obtener_posiciones_ocupadas_sensor():
+    """Obtiene todas las posiciones ocupadas en el sensor R307"""
+    packet_get_index = bytes(
+        [0xEF, 0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0x01, 0x00, 0x03, 0x1F, 0x00, 0x23]
+    )
+    response = send_command(packet_get_index)
+    time.sleep(1)
+
+    posiciones_ocupadas = []
+    if response and response[9] == 0x00:
+        for i in range(256):
+            byte_index = 10 + (i // 8)
+            bit_position = i % 8
+            if byte_index < len(response):
+                byte_value = response[byte_index]
+                if (byte_value >> bit_position) & 1:
+                    posiciones_ocupadas.append(i)
+
+    return posiciones_ocupadas
+
+
+def sincronizar_datos():
+    """
+    Sincroniza los datos del sensor R307 con Firebase.
+    Elimina del sensor las huellas que no existen en Firebase.
+    """
+    print("=== INICIANDO SINCRONIZACIÓN ===")
+
+    # 1. Obtener posiciones ocupadas en el sensor
+    posiciones_sensor = obtener_posiciones_ocupadas_sensor()
+    print(f"📋 Posiciones en sensor R307: {len(posiciones_sensor)}")
+
+    # 2. Obtener datos de Firebase
+    indices_firebase = get_data("indices_sensor")
+    if not indices_firebase:
+        indices_firebase = {}
+
+    posiciones_firebase = [int(pos) for pos in indices_firebase.keys() if pos.isdigit()]
+    print(f"☁️ Posiciones en Firebase: {len(posiciones_firebase)}")
+
+    # 3. Encontrar huellas que están en el sensor pero no en Firebase
+    huellas_a_eliminar = []
+    for pos in posiciones_sensor:
+        if pos not in posiciones_firebase:
+            huellas_a_eliminar.append(pos)
+
+    print(f"🗑️ Huellas a eliminar del sensor: {len(huellas_a_eliminar)}")
+
+    # 4. Eliminar huellas del sensor que no están en Firebase
+    eliminadas_exitosamente = 0
+    errores_eliminacion = 0
+
+    for pos in huellas_a_eliminar:
+        print(f"🔄 Eliminando posición {pos} del sensor...")
+        if eliminar_huella_del_sensor(pos):
+            eliminadas_exitosamente += 1
+            print(f"✅ Posición {pos} eliminada exitosamente")
+        else:
+            errores_eliminacion += 1
+            print(f"❌ Error al eliminar posición {pos}")
+
+        # Pequeña pausa entre eliminaciones para estabilidad
+        time.sleep(0.5)
+
+    # 5. Verificar sincronización final
+    posiciones_sensor_final = obtener_posiciones_ocupadas_sensor()
+    huellas_huerfanas = []
+    for pos in posiciones_sensor_final:
+        if pos not in posiciones_firebase:
+            huellas_huerfanas.append(pos)
+
+    # 6. Generar reporte de sincronización
+    reporte = {
+        "posiciones_sensor_inicial": len(posiciones_sensor),
+        "posiciones_firebase": len(posiciones_firebase),
+        "huellas_identificadas_eliminar": len(huellas_a_eliminar),
+        "huellas_eliminadas_exitosamente": eliminadas_exitosamente,
+        "errores_eliminacion": errores_eliminacion,
+        "posiciones_sensor_final": len(posiciones_sensor_final),
+        "huellas_huerfanas_restantes": len(huellas_huerfanas),
+        "sincronizacion_exitosa": len(huellas_huerfanas) == 0,
+        "timestamp": generar_timestamp(),
+    }
+
+    # 7. Guardar reporte en Firebase
+    send_data("sincronizacion/ultimo_reporte", reporte)
+
+    print("=== REPORTE DE SINCRONIZACIÓN ===")
+    print(f"📊 Posiciones iniciales en sensor: {reporte['posiciones_sensor_inicial']}")
+    print(f"☁️ Posiciones en Firebase: {reporte['posiciones_firebase']}")
+    print(f"🗑️ Huellas eliminadas: {reporte['huellas_eliminadas_exitosamente']}")
+    print(f"❌ Errores: {reporte['errores_eliminacion']}")
+    print(f"📍 Posiciones finales en sensor: {reporte['posiciones_sensor_final']}")
+    print(
+        f"🔄 Sincronización {'EXITOSA' if reporte['sincronizacion_exitosa'] else 'INCOMPLETA'}"
+    )
+
+    if huellas_huerfanas:
+        print(f"⚠️ Huellas huérfanas restantes: {huellas_huerfanas}")
+
+    return reporte
+
+
+def eliminar_huella_del_sensor(id_posicion):
+    """
+    Elimina una huella específica del sensor R307 por posición.
+    No afecta Firebase, solo elimina del sensor.
+    """
+    pos_high = (id_posicion >> 8) & 0xFF
+    pos_low = id_posicion & 0xFF
+
+    data_to_checksum = [0x01, 0x00, 0x07, 0x0C, pos_high, pos_low, 0x00, 0x01]
+    checksum = calculate_checksum(data_to_checksum)
+    checksum_high = (checksum >> 8) & 0xFF
+    checksum_low = checksum & 0xFF
+
+    packet_delete = bytes(
+        [
+            0xEF,
+            0x01,
+            0xFF,
+            0xFF,
+            0xFF,
+            0xFF,
+            0x01,
+            0x00,
+            0x07,
+            0x0C,
+            pos_high,
+            pos_low,
+            0x00,
+            0x01,
+            checksum_high,
+            checksum_low,
+        ]
+    )
+
+    response = send_command(packet_delete)
+    time.sleep(PAUSA_CORTA)
+
+    return response and response[9] == 0x00
+
+
 def generar_timestamp():
     """Genera un timestamp simple basado en time.ticks_ms()"""
     return time.ticks_ms()
@@ -78,7 +221,7 @@ def wait_for_finger_press(timeout, message):
         else:
             time.sleep(PAUSA_CORTA)
 
-    print("❌ Tiempo de espera agotado.")
+    print("⏰ Tiempo de espera agotado.")
     return False, None
 
 
@@ -100,7 +243,7 @@ def wait_for_finger_release(timeout, message):
         else:
             time.sleep(PAUSA_CORTA)
 
-    print("❌ Tiempo de espera agotado. El dedo no fue levantado.")
+    print("⏰ Tiempo de espera agotado. El dedo no fue levantado.")
     return False
 
 
@@ -324,7 +467,7 @@ def mostrar_posiciones():
     response = send_command(packet_get_index)
     time.sleep(1)
     if response and response[9] == 0x00:
-        print("📍 Posiciones ocupadas en sensor:")
+        print("🔍 Posiciones ocupadas en sensor:")
         posiciones_ocupadas = []
         for i in range(256):
             if i % 8 == 0:

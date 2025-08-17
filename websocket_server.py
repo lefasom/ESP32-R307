@@ -11,6 +11,7 @@ from r307_sensor import (
     mostrar_estadisticas,
     mostrar_posiciones,
     eliminar_huella,
+    sincronizar_datos,
 )
 
 
@@ -129,18 +130,33 @@ class WebSocketServer:
                 self.last_command_snapshot = waiting_command
                 return
 
-            if command == self.last_command_snapshot:
+            # Evitar procesar el mismo comando múltiples veces
+            command_signature = f"{command.get('action')}_{command.get('timestamp')}_{command.get('status')}"
+            last_signature = f"{self.last_command_snapshot.get('action') if self.last_command_snapshot else ''}_{self.last_command_snapshot.get('timestamp') if self.last_command_snapshot else ''}_{self.last_command_snapshot.get('status') if self.last_command_snapshot else ''}"
+
+            if command_signature == last_signature:
                 return
 
             self.last_command_snapshot = command
 
             if command.get("status") == "pending":
                 print(f"📨 Comando recibido: {command}")
+
+                # Marcar como procesando inmediatamente
+                command_processing = command.copy()
+                command_processing["status"] = "processing"
+                command_processing["processing_started"] = time.ticks_ms()
+                send_data(command_path, command_processing)
+
+                # Procesar el comando
                 result = self._process_command(command)
+
+                # Marcar como completado
                 command["status"] = "completed"
                 command["result"] = result
                 command["completed_at"] = time.ticks_ms()
                 send_data(command_path, command)
+
                 self._broadcast_to_clients(
                     {
                         "type": "command_result",
@@ -151,6 +167,18 @@ class WebSocketServer:
 
         except Exception as e:
             print(f"❌ Error verificando comandos: {e}")
+            # En caso de error, resetear a estado de espera
+            try:
+                error_command = {
+                    "action": "error",
+                    "status": "completed",
+                    "message": f"Error procesando comando: {str(e)}",
+                    "timestamp": time.ticks_ms(),
+                    "result": {"success": False, "message": f"Error: {str(e)}"},
+                }
+                send_data("commands/esp32_command", error_command)
+            except:
+                pass
 
     def _process_command(self, command):
         action = command.get("action")
@@ -188,8 +216,25 @@ class WebSocketServer:
 
         elif action == "get_statistics":
             print("📊 Obteniendo estadísticas...")
-            mostrar_estadisticas()
-            result = {"success": True, "message": "Estadísticas mostradas"}
+            self._broadcast_to_clients(
+                {"type": "status", "message": "Obteniendo estadísticas del sistema..."}
+            )
+            try:
+                mostrar_estadisticas()
+                result = {
+                    "success": True,
+                    "message": "Estadísticas obtenidas correctamente",
+                    "data": {
+                        "timestamp": time.ticks_ms(),
+                        "action_completed": "get_statistics",
+                    },
+                }
+            except Exception as e:
+                print(f"❌ Error obteniendo estadísticas: {e}")
+                result = {
+                    "success": False,
+                    "message": f"Error al obtener estadísticas: {str(e)}",
+                }
 
         elif action == "delete_fingerprint":
             print("🗑️ Eliminando huella...")
@@ -201,6 +246,48 @@ class WebSocketServer:
                 }
             else:
                 result = {"success": False, "message": "Error al eliminar la huella"}
+
+        elif action == "sync_fingerprint_data":
+            print("🔄 Iniciando sincronización de datos...")
+            self._broadcast_to_clients(
+                {
+                    "type": "status",
+                    "message": "Sincronizando datos del sensor con Firebase...",
+                }
+            )
+
+            try:
+                sync_report = sincronizar_datos()
+                if sync_report["sincronizacion_exitosa"]:
+                    result = {
+                        "success": True,
+                        "message": f"Sincronización completada. {sync_report['huellas_eliminadas_exitosamente']} huellas eliminadas del sensor.",
+                        "data": {
+                            "posiciones_sensor_inicial": sync_report[
+                                "posiciones_sensor_inicial"
+                            ],
+                            "posiciones_firebase": sync_report["posiciones_firebase"],
+                            "huellas_eliminadas": sync_report[
+                                "huellas_eliminadas_exitosamente"
+                            ],
+                            "posiciones_sensor_final": sync_report[
+                                "posiciones_sensor_final"
+                            ],
+                            "errores": sync_report["errores_eliminacion"],
+                        },
+                    }
+                else:
+                    result = {
+                        "success": False,
+                        "message": f"Sincronización incompleta. {sync_report['errores_eliminacion']} errores encontrados.",
+                        "data": sync_report,
+                    }
+            except Exception as e:
+                print(f"❌ Error durante sincronización: {e}")
+                result = {
+                    "success": False,
+                    "message": f"Error durante la sincronización: {str(e)}",
+                }
 
         return result
 
@@ -250,5 +337,5 @@ def start_websocket_server():
     try:
         server.start()
     except KeyboardInterrupt:
-        print("\n⏹️ Deteniendo servidor...")
+        print("\nℹ️ Deteniendo servidor...")
         server.stop()
