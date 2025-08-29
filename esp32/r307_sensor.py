@@ -206,6 +206,9 @@ def generar_timestamp():
 def wait_for_finger_press(timeout, message):
     """Espera activamente a que un dedo sea colocado en el sensor."""
     print(f"⏳ {message} ({timeout}s)...")
+    send_data("display", {"mensaje": message})
+
+    
     start_time = time.time()
     packet_get_image = bytes(
         [0xEF, 0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0x01, 0x00, 0x03, 0x01, 0x00, 0x05]
@@ -215,12 +218,15 @@ def wait_for_finger_press(timeout, message):
         response = send_command(packet_get_image)
         if response and response[9] == 0x00:
             print("✅ ¡Huella detectada!")
+            send_data("display", {"mensaje": "Huella detectada, Levanta el dedo."})
+            
             return True, response
         elif response and response[9] == 0x02:
             time.sleep(PAUSA_CORTA)
         else:
             time.sleep(PAUSA_CORTA)
-
+            
+    send_data("display", {"mensaje": " Tiempo de espera agotado."})
     print("⏰ Tiempo de espera agotado.")
     return False, None
 
@@ -228,6 +234,9 @@ def wait_for_finger_press(timeout, message):
 def wait_for_finger_release(timeout, message):
     """Espera activamente a que un dedo sea levantado del sensor."""
     print(f"☝️ {message} ({timeout}s)...")
+    if message=='':
+       send_data("display", {"mensaje": message})
+    
     start_time = time.time()
     packet_get_image = bytes(
         [0xEF, 0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0x01, 0x00, 0x03, 0x01, 0x00, 0x05]
@@ -236,13 +245,16 @@ def wait_for_finger_release(timeout, message):
     while (time.time() - start_time) < timeout:
         response = send_command(packet_get_image)
         if response and response[9] == 0x02:
+            # send_data("display", {"mensaje": "Dedo levantado"})
             print("✅ Dedo levantado.")
             return True
         elif response and response[9] == 0x00:
             time.sleep(PAUSA_CORTA)
         else:
             time.sleep(PAUSA_CORTA)
-
+            
+    
+    send_data("display", {"mensaje": " Tiempo de espera agotado. El dedo no fue levantado."})
     print("⏰ Tiempo de espera agotado. El dedo no fue levantado.")
     return False
 
@@ -251,6 +263,7 @@ def agregar_huella():
     print("=== AGREGAR NUEVA HUELLA ===")
     posicion = obtener_siguiente_posicion()
     print(f"Usando posición: {posicion}")
+    send_data("display", {"mensaje": f"Usando posicion: {posicion}"}) 
 
     success, _ = wait_for_finger_press(TIMEOUT_SEGUNDOS, "Coloque el dedo")
     if not success:
@@ -264,7 +277,7 @@ def agregar_huella():
     if not (response and response[9] == 0x00):
         return False
 
-    if not wait_for_finger_release(TIMEOUT_SEGUNDOS, "Levante el dedo"):
+    if not wait_for_finger_release(TIMEOUT_SEGUNDOS,''):
         return False
 
     success, _ = wait_for_finger_press(TIMEOUT_SEGUNDOS, "Coloque el dedo nuevamente")
@@ -348,6 +361,8 @@ def agregar_huella():
 
 def detectar_huella():
     print("=== DETECTAR HUELLA ===")
+    # send_data("display", {"mensaje":"Esperando Huella"})
+    
     success, _ = wait_for_finger_press(TIMEOUT_SEGUNDOS, "Esperando huella")
     if not success:
         return None
@@ -434,29 +449,29 @@ def detectar_huella():
         return None
 
 
-def mostrar_estadisticas():
-    # Estadísticas locales del sensor
-    packet_get_count = bytes(
-        [0xEF, 0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0x01, 0x00, 0x03, 0x09, 0x00, 0x0D]
-    )
-    response = send_command(packet_get_count)
-    time.sleep(PAUSA_CORTA)
-    if response and response[9] == 0x00:
-        count_sensor = int.from_bytes(response[10:12], "big")
-        print(f"📊 Huellas en sensor R307: {count_sensor}")
-        usuarios_firebase = get_data("usuarios")
-        if usuarios_firebase:
-            count_firebase = len(usuarios_firebase)
-            activos = sum(
-                1 for u in usuarios_firebase.values() if u.get("activo", True)
-            )
-            print(f"👥 Usuarios en Firebase: {count_firebase}")
-            print(f"✅ Usuarios activos: {activos}")
-            print(f"❌ Usuarios inactivos: {count_firebase - activos}")
-        else:
-            print("📂 Sin usuarios registrados en Firebase")
-    else:
-        print("Error al obtener las estadísticas del sensor.")
+# def mostrar_estadisticas():
+#     # Estadísticas locales del sensor
+#     packet_get_count = bytes(
+#         [0xEF, 0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0x01, 0x00, 0x03, 0x09, 0x00, 0x0D]
+#     )
+#     response = send_command(packet_get_count)
+#     time.sleep(PAUSA_CORTA)
+#     if response and response[9] == 0x00:
+#         count_sensor = int.from_bytes(response[10:12], "big")
+#         print(f"📊 Huellas en sensor R307: {count_sensor}")
+#         usuarios_firebase = get_data("usuarios")
+#         if usuarios_firebase:
+#             count_firebase = len(usuarios_firebase)
+#             activos = sum(
+#                 1 for u in usuarios_firebase.values() if u.get("activo", True)
+#             )
+#             print(f"👥 Usuarios en Firebase: {count_firebase}")
+#             print(f"✅ Usuarios activos: {activos}")
+#             print(f"❌ Usuarios inactivos: {count_firebase - activos}")
+#         else:
+#             print("📂 Sin usuarios registrados en Firebase")
+#     else:
+#         print("Error al obtener las estadísticas del sensor.")
 
 
 def mostrar_posiciones():
@@ -481,11 +496,11 @@ def mostrar_posiciones():
             if indice:
                 nombre = indice.get("nombre", "Sin nombre")
                 estado = "🟢" if indice.get("activo", True) else "🔴"
-                print(f"  Pos {pos}: {nombre} {estado}")
+                print(f"   Pos {pos}: {nombre} {estado}")
             else:
-                print(f"  Pos {pos}: Sin datos en Firebase")
+                print(f"   Pos {pos}: Sin datos en Firebase")
         if len(posiciones_ocupadas) > 10:
-            print(f"  ... y {len(posiciones_ocupadas) - 10} más")
+            print(f"   ... y {len(posiciones_ocupadas) - 10} más")
         print(f"Total: {len(posiciones_ocupadas)} posiciones ocupadas")
     else:
         print("Error al obtener las posiciones.")

@@ -1,95 +1,167 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { initializeApp } from 'firebase/app';
-import { getDatabase, ref, set, onValue } from 'firebase/database';
+import { getDatabase, ref, set, onValue, off } from 'firebase/database';
 
-// 1. Configuración de Firebase
-// Con los valores proporcionados por el usuario
+// Configuración de Firebase
 const firebaseConfig = {
-  apiKey: "AIzaSyCRO9H94xbbFul4NmOSAawG7rF784I7-6U",
-  authDomain: "esp32-a8053.firebaseapp.com",
-  databaseURL: "https://esp32-a8053-default-rtdb.firebaseio.com",
-  projectId: "esp32-a8053",
-  storageBucket: "esp32-a8053.firebasestorage.app",
-  messagingSenderId: "953937716607",
-  appId: "1:953937716607:web:4fae054f8c769f88b1e64a",
-  measurementId: "G-NHW47VF23M"
+    apiKey: "AIzaSyCRO9H94xbbFul4NmOSAawG7rF784I7-6U",
+    authDomain: "esp32-a8053.firebaseapp.com",
+    databaseURL: "https://esp32-a8053-default-rtdb.firebaseio.com",
+    projectId: "esp32-a8053",
+    storageBucket: "esp32-a8053.firebasestorage.app",
+    messagingSenderId: "953937716607",
+    appId: "1:953937716607:web:4fae054f8c769f88b1e64a",
+    measurementId: "G-NHW47VF23M"
 };
 
-// 2. Inicializa Firebase de forma modular
+// Inicializar Firebase una sola vez
 const app = initializeApp(firebaseConfig);
 const database = getDatabase(app);
 
 const App = () => {
-  const [status, setStatus] = useState('Listo para recibir comandos.');
-  const [loading, setLoading] = useState(false);
+    const [display, setDisplay] = useState('');
+    const [display2, setDisplay2] = useState('');
+    const [loading, setLoading] = useState(false);
 
-  // 3. Lógica para enviar comandos y escuchar respuestas
-  const sendCommand = async (commandType) => {
-    setLoading(true);
-    setStatus(`Enviando comando: ${commandType}...`);
-    const timestamp = Date.now();
-    const commandData = {
-      command: commandType,
-      timestamp: timestamp,
-      status: 'pending'
+    const displayStyle = {
+        backgroundColor: 'black',
+        color: 'rgb(0, 255, 0)',
+        fontSize: '1.5rem',
+        fontFamily: 'monospace',
+        padding: '20px',
+        textAlign: 'center',
+        border: '2px solid rgb(0, 255, 0)',
+        borderRadius: '10px',
+        width: '70%',
+        margin: '20px auto',
+        minHeight: '60px',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center'
     };
 
-    try {
-      const dbRef = ref(database, 'commands/esp32_command');
-      await set(dbRef, commandData);
-      setStatus(`Comando "${commandType}" enviado. Esperando respuesta...`);
-      listenForResponse(timestamp);
-    } catch (error) {
-      console.error("Error al enviar el comando: ", error);
-      setStatus('❌ Error al enviar el comando.');
-      setLoading(false);
-    }
-  };
+    // Un solo useEffect para gestionar ambos listeners
+    useEffect(() => {
+        const displayRef = ref(database, 'display');
+        const displayRef2 = ref(database, 'display2');
 
-  const listenForResponse = (timestamp) => {
-    const dbRef = ref(database, 'commands/esp32_command');
-    onValue(dbRef, (snapshot) => {
-      const data = snapshot.val();
-      if (data && data.timestamp === timestamp) {
-        if (data.status === 'completed') {
-          setStatus(`✅ Comando "${data.command}" completado.`);
-          setLoading(false);
-        } else if (data.status === 'error') {
-          setStatus(`❌ Error al ejecutar el comando "${data.command}".`);
-          setLoading(false);
-        } else {
-          setStatus(`Comando "${data.command}" en progreso...`);
+        const unsubscribeDisplay = onValue(displayRef, (snapshot) => {
+            const data = snapshot.val();
+            if (data && data.mensaje) {
+                setDisplay(data.mensaje);
+            }
+        }, (error) => {
+            console.error("Error al escuchar cambios en display:", error);
+            setLoading(false);
+        });
+
+        const unsubscribeDisplay2 = onValue(displayRef2, (snapshot) => {
+            const data = snapshot.val();
+            if (data) {
+                setDisplay2(data.result);
+            }
+        }, (error) => {
+            console.error("Error al escuchar cambios en display2:", error);
+            setLoading(false);
+        });
+
+        // Cleanup function para remover los listeners cuando el componente se desmonte
+        return () => {
+            off(displayRef, 'value', unsubscribeDisplay);
+            off(displayRef2, 'value', unsubscribeDisplay2);
+        };
+    }); // El array vacío asegura que el efecto se ejecute solo una vez
+
+    // ... El resto del código del componente App es igual
+    const sendCommand = async (commandType) => {
+        if (loading) return; 
+
+        setLoading(true);
+        const timestamp = Date.now();
+        const commandData = {
+            command: commandType,
+            timestamp: timestamp,
+            status: 'pending'
+        };
+
+        try {
+            const commandRef = ref(database, 'commands/esp32_command');
+            await set(commandRef, commandData);
+            
+            setTimeout(() => {
+                if (loading) {
+                    setLoading(false);
+                }
+            }, 3000); 
+            
+        } catch (error) {
+            console.error("Error al enviar el comando:", error);
+            setLoading(false);
         }
-      }
-    });
-  };
+    };
 
-  // 4. Estructura de la interfaz de usuario con solo los botones
-  return (
-    <div style={{ fontFamily: 'Arial, sans-serif', padding: '20px', maxWidth: '600px', margin: 'auto', textAlign: 'center' }}>
-      <h1>Sistema de Acceso con Huella</h1>
-      <p>Presiona el botón para enviar un comando al sensor R307 a través de Firebase.</p>
-      
-      <div style={{ margin: '20px 0' }}>
-        <button
-          onClick={() => sendCommand('agregar_huella')}
-          disabled={loading}
-          style={{ marginRight: '10px', padding: '12px 24px', fontSize: '16px', cursor: loading ? 'not-allowed' : 'pointer' }}
-        >
-          Agregar Huella
-        </button>
-        <button
-          onClick={() => sendCommand('detectar_huella')}
-          disabled={loading}
-          style={{ padding: '12px 24px', fontSize: '16px', cursor: loading ? 'not-allowed' : 'pointer' }}
-        >
-          Detectar Huella
-        </button>
-      </div>
+    return (
+        <div style={{ 
+            fontFamily: 'Arial, sans-serif', 
+            padding: '20px', 
+            maxWidth: '600px', 
+            margin: 'auto', 
+            textAlign: 'center',
+            backgroundColor: '#f5f5f5',
+            minHeight: '100vh'
+        }}>
+            <h1 style={{ color: '#333', marginBottom: '10px' }}>Sistema de Acceso con Huella</h1>
+            <p style={{ color: '#666', marginBottom: '30px' }}>
+                Presiona el botón para enviar un comando al sensor R307 a través de Firebase.
+            </p>
 
-      <p style={{ fontWeight: 'bold', minHeight: '20px' }}>{status}</p>
-    </div>
-  );
+            <div style={displayStyle}>
+                {display || 'Esperando datos del ESP32...'}
+            </div>
+            <div style={displayStyle}>
+                {display2 || ''}
+            </div>
+            <div style={{ margin: '30px 0' }}>
+                <button
+                    onClick={() => sendCommand('agregar_huella')}
+                    disabled={loading}
+                    style={{
+                        marginRight: '15px',
+                        marginBottom: '10px',
+                        padding: '12px 24px',
+                        fontSize: '16px',
+                        cursor: loading ? 'not-allowed' : 'pointer',
+                        backgroundColor: loading ? '#ccc' : '#4CAF50',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '5px',
+                        transition: 'background-color 0.3s'
+                    }}
+                >
+                    {loading ? '⏳ Procesando...' : '➕ Agregar Huella'}
+                </button>
+                
+                <button
+                    onClick={() => sendCommand('detectar_huella')}
+                    disabled={loading}
+                    style={{
+                        marginBottom: '10px',
+                        padding: '12px 24px',
+                        fontSize: '16px',
+                        cursor: loading ? 'not-allowed' : 'pointer',
+                        backgroundColor: loading ? '#ccc' : '#2196F3',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '5px',
+                        transition: 'background-color 0.3s'
+                    }}
+                >
+                    {loading ? '⏳ Procesando...' : '🔍 Detectar Huella'}
+                </button>
+            </div>
+
+        </div>
+    );
 };
 
 export default App;
