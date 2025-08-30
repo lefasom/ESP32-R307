@@ -26,20 +26,29 @@ const App = () => {
     const displayStyle = {
         backgroundColor: 'black',
         color: 'rgb(0, 255, 0)',
-        fontSize: '1.5rem',
+        fontSize: '1rem',
         fontFamily: 'monospace',
         padding: '20px',
         textAlign: 'center',
-        border: '2px solid rgb(0, 255, 0)',
         borderRadius: '10px',
-        width: '70%',
-        margin: '20px auto',
-        minHeight: '60px',
+        width: '60%',
         display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center'
+        flexDirection:'column',
+        margin: '10px auto',
+        height: '80px',
+        alignItems: 'start',
     };
-
+     const box = {
+        color: 'hsla(188, 100%, 59%, 0.95)',
+        fontSize: '1rem',
+      
+    };
+    const box2 = {
+        color: 'rgba(140, 255, 0, 1)',
+        fontSize: '2rem',
+        margin: '10px 0',
+      
+    };
     // Un solo useEffect para gestionar ambos listeners
     useEffect(() => {
         const displayRef = ref(database, 'display');
@@ -89,10 +98,8 @@ const App = () => {
             await set(commandRef, commandData);
             
             setTimeout(() => {
-                if (loading) {
                     setLoading(false);
-                }
-            }, 3000); 
+            }, 10000); 
             
         } catch (error) {
             console.error("Error al enviar el comando:", error);
@@ -116,10 +123,8 @@ const App = () => {
             </p>
 
             <div style={displayStyle}>
-                {display || 'Esperando datos del ESP32...'}
-            </div>
-            <div style={displayStyle}>
-                {display2 || ''}
+              <span style={box}>{display || 'Esperando datos del ESP32...'}</span>
+              <span style={box2}> {display2 || ''}</span>
             </div>
             <div style={{ margin: '30px 0' }}>
                 <button
